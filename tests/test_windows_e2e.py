@@ -62,7 +62,8 @@ def labels(app):
 
 
 @pytest.fixture
-def app(tmp_path, monkeypatch):
+def make_app(tmp_path, monkeypatch):
+    """Запускает программу на временной папке с данными; можно запускать повторно."""
     from tkinter import messagebox
 
     monkeypatch.setenv("CHESTCOUNTER_DATA_DIR", str(tmp_path))
@@ -72,13 +73,25 @@ def app(tmp_path, monkeypatch):
 
     from chest_counter.app import App
 
-    application = App()
-    pump(application, 0.3)
-    yield application
-    try:
-        application.quit()
-    except Exception:
-        pass
+    started = []
+
+    def start():
+        application = App()
+        started.append(application)
+        pump(application, 0.3)
+        return application
+
+    yield start
+    for application in started:
+        try:
+            application.quit()
+        except Exception:
+            pass  # уже закрыта самим тестом
+
+
+@pytest.fixture
+def app(make_app):
+    return make_app()
 
 
 def require_working_key_simulation(app):
@@ -167,3 +180,82 @@ def test_settings_window_catches_real_key_presses(app):
     assert pump(app, 3, until=lambda: app.counter.current == count + 1)
     press(VK_CONTROL, VK_SHIFT, ord("U"))
     assert pump(app, 3, until=lambda: app.counter.current == count)
+
+
+VK_F10, VK_F6 = 0x79, 0x75
+
+
+def test_whole_match_played_with_real_keys(app):
+    """Три сундука, одна отмена, конец матча — всё клавишами, как в игре."""
+    require_working_key_simulation(app)   # это уже первое нажатие F9
+
+    for expected in (2, 3):
+        press(VK_F9)
+        assert pump(app, 3, until=lambda: app.counter.current == expected)
+
+    press(VK_CONTROL, VK_F9)              # отмена
+    assert pump(app, 3, until=lambda: app.counter.current == 2)
+
+    press(VK_F10)                         # конец матча
+    assert pump(app, 3, until=lambda: app.counter.current == 0)
+    summary = app.storage.summary()
+    assert (summary.matches, summary.chests, summary.record) == (1, 2, 2)
+
+    snapshot = app.counter.snapshot()
+    assert (snapshot.current, snapshot.today, snapshot.all_time) == (0, 2, 2)
+
+    # Отмена на нуле не уводит счёт в минус, пустой матч не записывается.
+    press(VK_CONTROL, VK_F9)
+    press(VK_F10)
+    pump(app, 0.6)
+    assert app.counter.current == 0
+    assert app.storage.summary().matches == 1
+
+
+def test_rebound_keys_and_count_survive_restart(make_app):
+    """Закрыли программу и открыли снова: клавиши и счёт матча на месте."""
+    from chest_counter.core.hotkeys import parse_hotkey
+
+    first = make_app()
+    require_working_key_simulation(first)
+    assert first.change_hotkey("add", parse_hotkey("Ctrl+Shift+F6")) is None
+    press(VK_CONTROL, VK_SHIFT, VK_F6)
+    assert pump(first, 3, until=lambda: first.counter.current == 2)
+    first.quit()
+
+    second = make_app()
+    assert second._hotkey_failures == []       # прежняя копия освободила клавиши
+    assert labels(second)["add"] == "Ctrl+Shift+F6"
+    assert second.counter.current == 2         # счёт матча не потерялся
+    press(VK_CONTROL, VK_SHIFT, VK_F6)
+    assert pump(second, 3, until=lambda: second.counter.current == 3)
+    press(VK_F9)                               # старая клавиша так и не вернулась
+    pump(second, 0.5)
+    assert second.counter.current == 3
+
+
+def test_key_taken_by_another_program_is_refused(app):
+    """Клавишу держит «другая программа» — счётчик отказывает и оставляет прежнюю."""
+    from chest_counter.core.hotkeys import parse_hotkey
+    from chest_counter.win.hotkeys import HotkeyListener
+
+    require_working_key_simulation(app)
+    taken = parse_hotkey("Ctrl+Alt+F6")
+    other_program = HotkeyListener({"x": taken}, lambda _action: None)
+    assert other_program.start() == []
+    try:
+        error = app.change_hotkey("add", taken)
+        assert error and "занята" in error
+        assert labels(app)["add"] == "F9"
+        assert app._hotkey_failures == []
+
+        count = app.counter.current
+        press(VK_F9)                           # прежняя клавиша продолжает работать
+        assert pump(app, 3, until=lambda: app.counter.current == count + 1)
+    finally:
+        other_program.stop()
+
+    # Одна клавиша на два действия — тоже отказ.
+    error = app.change_hotkey("undo", parse_hotkey("F9"))
+    assert error and "уже назначена" in error
+    assert labels(app)["undo"] == "Ctrl+F9"
