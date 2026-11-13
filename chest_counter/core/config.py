@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -56,7 +57,8 @@ def _merge(defaults: Any, user: Any) -> Any:
         return user if isinstance(user, bool) else defaults
     if isinstance(defaults, (int, float)):
         # bool — подкласс int, но true/false вместо числа нам не подходит.
-        if isinstance(user, (int, float)) and not isinstance(user, bool):
+        # Python-разборщик JSON пропускает NaN и Infinity — такие числа нам не нужны.
+        if isinstance(user, (int, float)) and not isinstance(user, bool) and math.isfinite(user):
             return user
         return defaults
     if isinstance(defaults, str):
@@ -68,11 +70,19 @@ def save_config(path: Path, config: dict[str, Any]) -> None:
     path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def _try_save(path: Path, config: dict[str, Any]) -> None:
+    """Запись «по возможности»: если диск недоступен, работаем с настройками в памяти."""
+    try:
+        save_config(path, config)
+    except OSError:
+        pass
+
+
 def load_config(path: Path) -> dict[str, Any]:
     """Возвращает полный конфиг; при необходимости создаёт или чинит файл."""
     if not path.exists():
         config = copy.deepcopy(DEFAULT_CONFIG)
-        save_config(path, config)
+        _try_save(path, config)
         return config
 
     try:
@@ -84,14 +94,11 @@ def load_config(path: Path) -> dict[str, Any]:
         except OSError:
             pass
         config = copy.deepcopy(DEFAULT_CONFIG)
-        save_config(path, config)
+        _try_save(path, config)
         return config
 
     config = _merge(DEFAULT_CONFIG, raw)
     if config != raw:
         # Дописываем недостающие ключи, чтобы их было видно в файле.
-        try:
-            save_config(path, config)
-        except OSError:
-            pass
+        _try_save(path, config)
     return config

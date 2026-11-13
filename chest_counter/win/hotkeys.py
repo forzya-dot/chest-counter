@@ -18,14 +18,15 @@ from dataclasses import dataclass
 from typing import Callable
 
 from ..core.hotkeys import Hotkey
+from ._dll import system_dll
 
 WM_HOTKEY = 0x0312
 WM_QUIT = 0x0012
 MOD_NOREPEAT = 0x4000  # удержание клавиши не даёт повторных срабатываний
 ERROR_HOTKEY_ALREADY_REGISTERED = 1409
 
-_user32 = ctypes.WinDLL("user32", use_last_error=True)
-_kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+_user32 = system_dll("user32")
+_kernel32 = system_dll("kernel32")
 
 _user32.RegisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT]
 _user32.RegisterHotKey.restype = wintypes.BOOL

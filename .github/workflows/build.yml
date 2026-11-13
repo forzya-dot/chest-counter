@@ -7,26 +7,31 @@ on:
   pull_request:
   workflow_dispatch:      # кнопка «Run workflow» на вкладке Actions
 
+# По умолчанию у сборки нет права что-либо менять в репозитории.
 permissions:
   contents: read
+
+# Сторонние действия закреплены по хешу коммита, а не по тегу: тег можно
+# передвинуть на другой код, а хеш — нельзя.
 
 jobs:
   build:
     runs-on: windows-latest
     timeout-minutes: 20
-    permissions:
-      contents: write     # нужно только шагу с релизом
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false   # токен GitHub не остаётся на диске сборочной машины
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
-          cache: pip
 
+      # Только точные версии с проверкой контрольных сумм и только готовые
+      # пакеты (wheel): при установке не выполняется чужой setup.py.
       - name: Установка зависимостей
-        run: python -m pip install -r requirements.txt -r requirements-dev.txt
+        run: 'python -m pip install --require-hashes --only-binary=:all: -r requirements-lock.txt'
 
       # Сборка начнётся, только если тесты прошли.
       # Здесь же выполняются Windows-тесты, которые на Mac пропускаются.
@@ -60,16 +65,52 @@ jobs:
           Write-Host "Код возврата: $($process.ExitCode)"
           if ($process.ExitCode -ne 0) { exit 1 }
 
+      # Контрольная сумма: по ней можно убедиться, что скачанный файл — тот самый,
+      # который собрала эта сборка.
+      - name: Контрольная сумма SHA-256
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash "dist\ChestCounter.exe" -Algorithm SHA256).Hash.ToLower()
+          # WriteAllText с `n: без перевода строки в стиле Windows, иначе sha256sum не прочитает файл
+          [IO.File]::WriteAllText("$PWD\dist\ChestCounter.exe.sha256", "$hash  ChestCounter.exe`n")
+          Write-Host "SHA-256: $hash"
+
       - name: Выложить .exe как artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ChestCounter
-          path: dist/ChestCounter.exe
+          path: |
+            dist/ChestCounter.exe
+            dist/ChestCounter.exe.sha256
           if-no-files-found: error
 
-      - name: Релиз (только для тегов v*)
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: pwsh
+  # Отдельная задача с правом записи: она не запускает код проекта,
+  # а только публикует уже собранный и проверенный файл.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ChestCounter
+
+      - name: Создать релиз
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$env:GITHUB_REF_NAME" "dist/ChestCounter.exe" --title "$env:GITHUB_REF_NAME" --generate-notes
+        run: |
+          sha256sum --check ChestCounter.exe.sha256
+          {
+            echo "Скачайте **ChestCounter.exe** и запустите. Инструкция — в README."
+            echo
+            echo "Контрольная сумма SHA-256:"
+            echo '```'
+            cut -d' ' -f1 ChestCounter.exe.sha256
+            echo '```'
+          } > notes.md
+          gh release create "$GITHUB_REF_NAME" ChestCounter.exe ChestCounter.exe.sha256 \
+            --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --notes-file notes.md

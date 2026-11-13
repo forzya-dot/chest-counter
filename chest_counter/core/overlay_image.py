@@ -30,6 +30,8 @@ ANCHORS = (
     "bottom-left", "bottom-center", "bottom-right",
 )
 
+_ALLOWED_FORMATS = ("PNG", "JPEG", "GIF", "BMP", "WEBP")
+
 # Жирные шрифты: первые два есть в Windows, остальные — для Mac/Linux при разработке.
 _FONT_CANDIDATES = ("segoeuib.ttf", "arialbd.ttf", "Arial Bold.ttf", "DejaVuSans-Bold.ttf")
 
@@ -52,9 +54,12 @@ def load_image(path: Path | str | None) -> Image.Image:
     """Загружает картинку; если не получилось — возвращает заглушку."""
     if path:
         try:
-            with Image.open(path) as image:
+            # formats: открываем только обычные картинки, а не любой из десятков
+            # форматов Pillow. Слишком большие файлы Pillow отвергает сам
+            # (DecompressionBombError) — тогда тоже показываем заглушку.
+            with Image.open(path, formats=_ALLOWED_FORMATS) as image:
                 return image.convert("RGBA")
-        except (OSError, ValueError):
+        except Exception:
             pass
     return placeholder_image()
 

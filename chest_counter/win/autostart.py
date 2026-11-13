@@ -33,6 +33,17 @@ def is_enabled() -> bool:
         return False
 
 
+def refresh() -> None:
+    """Если автозапуск включён, а .exe переместили — исправляет путь в реестре."""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY) as key:
+            stored, _kind = winreg.QueryValueEx(key, _VALUE_NAME)
+    except OSError:
+        return  # автозапуск выключен
+    if stored != _command():
+        set_enabled(True)
+
+
 def set_enabled(enabled: bool) -> None:
     # CreateKeyEx, а не OpenKey: у нового пользователя раздела Run может ещё не быть.
     with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, _RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:

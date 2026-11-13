@@ -112,3 +112,22 @@ def test_alpha_with_odd_settings():
     assert oi.alpha_at(500, 1000, 5000) == pytest.approx(0.5)  # затухание длиннее показа
     assert oi.alpha_at(50, -10, 0) == 1.0               # длительность не меньше 100 мс
     assert oi.alpha_at(150, -10, 0) is None
+
+
+def test_load_image_accepts_only_common_formats(tmp_path):
+    """Редкие форматы (здесь TIFF) не открываем — вместо них заглушка."""
+    tiff = tmp_path / "picture.tiff"
+    Image.new("RGBA", (10, 10), (255, 0, 0, 255)).save(tiff)
+    assert oi.load_image(tiff).size == (256, 256)
+
+    png = tmp_path / "picture.png"
+    Image.new("RGBA", (10, 10), (255, 0, 0, 255)).save(png)
+    assert oi.load_image(png).size == (10, 10)
+
+
+def test_load_image_survives_decompression_bomb(tmp_path, monkeypatch):
+    """Слишком большая картинка не должна ронять программу."""
+    png = tmp_path / "huge.png"
+    Image.new("RGBA", (100, 100)).save(png)
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 10)  # 100x100 теперь «бомба»
+    assert oi.load_image(png).size == (256, 256)

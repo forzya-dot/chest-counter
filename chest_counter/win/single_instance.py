@@ -9,9 +9,11 @@ from __future__ import annotations
 import ctypes
 from ctypes import wintypes
 
+from ._dll import system_dll
+
 ERROR_ALREADY_EXISTS = 183
 
-_kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+_kernel32 = system_dll("kernel32")
 _kernel32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
 _kernel32.CreateMutexW.restype = wintypes.HANDLE
 

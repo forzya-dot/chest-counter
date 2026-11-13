@@ -43,6 +43,7 @@ class App:
     def __init__(self, minimized: bool = False, self_test: bool = False):
         self._self_test = self_test
         self._failed = False  # для самопроверки: была ли ошибка в обработчиках
+        self._tray_hint_shown = False
         self._events: queue.Queue[str] = queue.Queue()
 
         folder = data_dir()
@@ -104,6 +105,12 @@ class App:
                 warnings.append(
                     f"В config.json непонятная клавиша «{text}» — использую {default}."
                 )
+        combos = [(hotkey.modifiers, hotkey.vk) for hotkey in result.values()]
+        if len(set(combos)) < len(combos):
+            warnings.append(
+                "В config.json одна и та же клавиша назначена на несколько действий — "
+                "сработает только первое."
+            )
         return result
 
     def _init_windows(self, warnings: list[str]) -> None:
@@ -113,6 +120,10 @@ class App:
         from .win.sound import Beeper
 
         self._autostart = autostart
+        try:
+            autostart.refresh()  # .exe могли переместить после включения автозапуска
+        except OSError:
+            log.exception("Не удалось обновить запись автозапуска")
         self._beeper = Beeper(self.config["sound"]["enabled"])
 
         if self.config["overlay"]["enabled"]:
@@ -220,6 +231,12 @@ class App:
         """Крестик окна: прячемся в трей, программа продолжает работать."""
         if self._tray is not None:
             self.root.withdraw()
+            if not self._tray_hint_shown:
+                self._tray_hint_shown = True
+                self._tray.notify(
+                    "Программа продолжает работать. Значок — возле часов; "
+                    "чтобы закрыть совсем, выберите в его меню «Выход»."
+                )
         elif IS_WINDOWS:
             self.root.iconify()  # трея нет — хотя бы на панель задач
         else:
@@ -324,9 +341,9 @@ def _square_icon(picture: Image.Image, size: int) -> Image.Image:
 def _native_message(text: str, error: bool = False) -> None:
     """Сообщение без tkinter — на случай, когда главное окно создать не удалось."""
     if IS_WINDOWS:
-        import ctypes
+        from .win._dll import system_dll
 
-        ctypes.windll.user32.MessageBoxW(None, text, TITLE, 0x10 if error else 0x40)
+        system_dll("user32").MessageBoxW(None, text, TITLE, 0x10 if error else 0x40)
     else:
         print(text, file=sys.stderr)
 
@@ -334,9 +351,9 @@ def _native_message(text: str, error: bool = False) -> None:
 def _enable_dpi_awareness() -> None:
     """Чёткий текст и настоящие пиксели на экранах с масштабом 125–200 %."""
     try:
-        import ctypes
+        from .win._dll import system_dll
 
-        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        system_dll("shcore").SetProcessDpiAwareness(1)
     except Exception:
         pass  # старая Windows или режим уже задан — не страшно
 
@@ -348,15 +365,14 @@ def main(argv: list[str] | None = None) -> int:
     # parse_known_args: лишние аргументы не должны ронять программу без консоли.
     args, _unknown = parser.parse_known_args(argv)
 
-    # Консоли у программы нет, поэтому ошибки пишем в файл рядом с данными.
-    handler = RotatingFileHandler(
-        data_dir() / "app.log", maxBytes=200_000, backupCount=1, encoding="utf-8"
-    )
-    logging.basicConfig(
-        level=logging.INFO, handlers=[handler], format="%(asctime)s %(levelname)s %(message)s"
-    )
-
     try:
+        # Консоли у программы нет, поэтому ошибки пишем в файл рядом с данными.
+        handler = RotatingFileHandler(
+            data_dir() / "app.log", maxBytes=200_000, backupCount=1, encoding="utf-8"
+        )
+        logging.basicConfig(
+            level=logging.INFO, handlers=[handler], format="%(asctime)s %(levelname)s %(message)s"
+        )
         if IS_WINDOWS:
             _enable_dpi_awareness()
             if not args.self_test:
@@ -372,7 +388,8 @@ def main(argv: list[str] | None = None) -> int:
         log.exception("Программа завершилась с ошибкой")
         if not args.self_test:
             _native_message(
-                f"Программа не смогла запуститься:\n{error}\n\nПодробности: {data_dir() / 'app.log'}",
+                f"Программа не смогла запуститься:\n{error}\n\n"
+                "Подробности — в файле app.log в папке %APPDATA%\\ChestCounter.",
                 error=True,
             )
         return 1

@@ -24,6 +24,7 @@ from typing import Any
 from PIL import Image, ImageTk
 
 from ..core import overlay_image
+from ._dll import system_dll
 
 GWL_EXSTYLE = -20
 WS_EX_TOPMOST = 0x00000008
@@ -45,7 +46,7 @@ SWP_NOACTIVATE = 0x0010
 
 FRAME_MS = 30  # шаг анимации исчезновения
 
-_user32 = ctypes.WinDLL("user32", use_last_error=True)
+_user32 = system_dll("user32")
 
 # В 64-битном Python нужны *LongPtr-функции; в 32-битном их нет.
 _get_ex_style = getattr(_user32, "GetWindowLongPtrW", None) or _user32.GetWindowLongW

@@ -64,3 +64,20 @@ def test_file_with_bom_is_read(tmp_path):
     path = tmp_path / "config.json"
     path.write_text(json.dumps({"hotkeys": {"add": "F7"}}), encoding="utf-8-sig")
     assert load_config(path)["hotkeys"]["add"] == "F7"
+
+
+def test_nan_and_infinity_are_rejected(tmp_path):
+    """Python читает NaN и Infinity из JSON — в настройках им не место."""
+    path = tmp_path / "config.json"
+    path.write_text(
+        '{"overlay": {"size": Infinity, "duration_ms": NaN, "offset_x": -Infinity}}',
+        encoding="utf-8",
+    )
+    overlay = load_config(path)["overlay"]
+    assert (overlay["size"], overlay["duration_ms"], overlay["offset_x"]) == (160, 1500, 40)
+
+
+def test_unwritable_location_still_returns_defaults(tmp_path):
+    """Если файл настроек нельзя создать, программа работает с настройками по умолчанию."""
+    missing_folder = tmp_path / "нет такой папки" / "config.json"
+    assert load_config(missing_folder) == DEFAULT_CONFIG

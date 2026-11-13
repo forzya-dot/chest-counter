@@ -132,3 +132,42 @@ def test_sounds_differ_per_action():
     assert set(SIGNALS) == {"add", "undo", "end_match"}
     assert len({tuple(v) for v in SIGNALS.values()}) == 3
     Beeper(enabled=True).play("add")  # не должно падать даже без звуковой карты
+
+
+def test_autostart_refresh_fixes_moved_exe(monkeypatch):
+    import winreg
+
+    from chest_counter.win import autostart
+
+    monkeypatch.setattr(autostart, "_VALUE_NAME", "ChestCounterPytest")
+    try:
+        autostart.refresh()  # автозапуск выключен — ничего не делает
+        assert not autostart.is_enabled()
+
+        # Имитируем запись, оставшуюся от старого расположения программы.
+        with winreg.CreateKeyEx(
+            winreg.HKEY_CURRENT_USER, autostart._RUN_KEY, 0, winreg.KEY_SET_VALUE
+        ) as key:
+            winreg.SetValueEx(key, "ChestCounterPytest", 0, winreg.REG_SZ, '"C:\\old\\app.exe" --minimized')
+        autostart.refresh()
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, autostart._RUN_KEY) as key:
+            stored, _kind = winreg.QueryValueEx(key, "ChestCounterPytest")
+        assert stored == autostart._command()
+    finally:
+        autostart.set_enabled(False)
+
+
+def test_system_dlls_are_loaded_from_system32():
+    import ctypes
+    import os
+    from ctypes import wintypes
+
+    from chest_counter.win._dll import system_dll
+
+    kernel32 = system_dll("kernel32")
+    kernel32.GetModuleFileNameW.argtypes = [wintypes.HMODULE, wintypes.LPWSTR, wintypes.DWORD]
+    system32 = os.path.join(os.environ["SystemRoot"], "System32").lower()
+    for name in ("user32", "kernel32", "shcore"):
+        buffer = ctypes.create_unicode_buffer(1024)
+        assert kernel32.GetModuleFileNameW(system_dll(name)._handle, buffer, 1024)
+        assert buffer.value.lower().startswith(system32), buffer.value
