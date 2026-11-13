@@ -34,7 +34,8 @@ def is_enabled() -> bool:
 
 
 def set_enabled(enabled: bool) -> None:
-    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
+    # CreateKeyEx, а не OpenKey: у нового пользователя раздела Run может ещё не быть.
+    with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, _RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
         if enabled:
             winreg.SetValueEx(key, _VALUE_NAME, 0, winreg.REG_SZ, _command())
         else:
