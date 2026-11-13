@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import sys
 import tkinter as tk
+from tkinter import messagebox
 from typing import Callable
 
 from ..core.hotkeys import (
@@ -19,6 +20,7 @@ from ..core.hotkeys import (
     VK_ESCAPE,
     Hotkey,
     HotkeyError,
+    binding_warning,
     hotkey_from_vk,
     parse_hotkey,
 )
@@ -30,8 +32,19 @@ ACTIONS = (
     ("end_match", "Завершить матч"),
 )
 
-HINT = "Нажмите «Изменить», затем нужную клавишу или сочетание."
+HINT = (
+    "Нажмите «Изменить», затем нужную клавишу. Подходят F1–F24, буквы, цифры, "
+    "цифровой блок и другие клавиши — сами по себе или с Ctrl, Alt, Shift."
+)
 WAITING = "Нажмите клавишу или сочетание…  (Esc — отмена)"
+NO_MOUSE = (
+    "Кнопки мыши назначить нельзя: Windows умеет делать горячими только клавиши "
+    "клавиатуры. Нажмите клавишу или Esc для отмены."
+)
+UNSUPPORTED = (
+    "Эту клавишу Windows не позволяет сделать горячей. "
+    "Нажмите другую или Esc для отмены."
+)
 
 
 class HotkeysWindow:
@@ -44,14 +57,17 @@ class HotkeysWindow:
         suspend: Callable[[], None],
         resume: Callable[[], None],
         modifiers_down: Callable[[], tuple[bool, bool, bool]] | None = None,
+        confirm: Callable[[str], bool] | None = None,
     ):
         """
         get_bindings   — текущие клавиши;
         change         — назначить клавишу действию; возвращает текст ошибки или None;
         reset          — вернуть клавиши по умолчанию; возвращает текст ошибки или None;
         suspend/resume — временно отключить и снова включить глобальные клавиши;
-        modifiers_down — (Ctrl, Alt, Shift) зажаты ли сейчас (в Windows — через WinAPI).
+        modifiers_down — (Ctrl, Alt, Shift) зажаты ли сейчас (в Windows — через WinAPI);
+        confirm        — задать вопрос «да/нет»; по умолчанию обычное окно с вопросом.
         """
+        self._confirm = confirm or self._ask
         self._get_bindings = get_bindings
         self._change = change
         self._reset = reset
@@ -67,6 +83,12 @@ class HotkeysWindow:
         self.window.protocol("WM_DELETE_WINDOW", self.close)
         self.window.bind("<KeyPress>", self._on_key)
         self.window.bind("<FocusOut>", self._on_focus_out)
+        # Правая, средняя и боковые кнопки мыши: объясняем, что их назначить нельзя.
+        for number in (2, 3, 4, 5):
+            try:
+                self.window.bind(f"<Button-{number}>", self._on_mouse_button)
+            except tk.TclError:
+                pass  # в этой версии Tk такой кнопки нет
 
         body = tk.Frame(self.window, bg=theme.BG, padx=20, pady=16)
         body.pack(fill="both", expand=True)
@@ -129,6 +151,13 @@ class HotkeysWindow:
         for action, hotkey in self._get_bindings().items():
             if action in self._labels:
                 self._labels[action].configure(text=hotkey.label, fg=theme.ACCENT)
+
+    def _ask(self, text: str) -> bool:
+        return bool(messagebox.askyesno("Горячие клавиши", text, parent=self.window, icon="warning"))
+
+    def _on_mouse_button(self, _event) -> None:
+        if self._capturing is not None:
+            self._say(NO_MOUSE, warning=True)
 
     def _say(self, text: str, warning: bool = False) -> None:
         self._message.configure(text=text, fg=theme.WARNING if warning else theme.MUTED)
@@ -217,10 +246,18 @@ class HotkeysWindow:
         if action is None:
             return
         if hotkey is None:
-            self._say("Эта клавиша не поддерживается. Нажмите другую или Esc для отмены.", warning=True)
+            self._say(UNSUPPORTED, warning=True)
             return  # продолжаем ждать
 
+        # Дальше ожидание закончено. Сбрасываем его до вопроса: окно с вопросом
+        # забирает фокус, а потеря фокуса во время ожидания означает отмену.
         self._capturing = None
+        warning = binding_warning(hotkey)
+        if warning and not self._confirm(warning):
+            self._resume()
+            self.refresh()
+            self._say("Клавиша не изменена.")
+            return
         error = self._change(action, hotkey)
         if error:
             self._resume()  # клавиши остались прежними — включаем их обратно

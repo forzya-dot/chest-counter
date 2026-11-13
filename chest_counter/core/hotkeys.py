@@ -37,6 +37,27 @@ _KEYS: dict[str, tuple[int, str]] = {
     "insert": (0x2D, "Insert"),
     "delete": (0x2E, "Delete"),
     "scrolllock": (0x91, "ScrollLock"),
+    "enter": (0x0D, "Enter"),
+    "backspace": (0x08, "Backspace"),
+    "printscreen": (0x2C, "PrintScreen"),
+    # Операции цифрового блока. Знак «+» в названии нельзя: он разделяет части сочетания.
+    "nummul": (0x6A, "NumMul"),
+    "numplus": (0x6B, "NumPlus"),
+    "numminus": (0x6D, "NumMinus"),
+    "numdot": (0x6E, "NumDot"),
+    "numdiv": (0x6F, "NumDiv"),
+    # Знаки препинания (подписи — как на английской раскладке).
+    ";": (0xBA, ";"),
+    "=": (0xBB, "="),
+    ",": (0xBC, ","),
+    "-": (0xBD, "-"),
+    ".": (0xBE, "."),
+    "/": (0xBF, "/"),
+    "`": (0xC0, "`"),
+    "[": (0xDB, "["),
+    "\\": (0xDC, "\\"),
+    "]": (0xDD, "]"),
+    "'": (0xDE, "'"),
 }
 _KEYS.update({f"f{n}": (0x70 + n - 1, f"F{n}") for n in range(1, 25)})          # F1..F24
 _KEYS.update({f"num{n}": (0x60 + n, f"Num{n}") for n in range(10)})              # цифровой блок
@@ -57,7 +78,7 @@ MODIFIER_VKS = frozenset(
 # Клавиши, которые можно назначать без Ctrl/Alt: ими не печатают текст.
 _SAFE_ALONE = frozenset(
     [0x70 + n for n in range(24)]      # F1..F24
-    + [0x60 + n for n in range(10)]    # цифровой блок
+    + [0x60 + n for n in range(16)]    # цифровой блок: цифры и операции
     + [0x13, 0x91]                     # Pause, ScrollLock
 )
 
@@ -112,19 +133,23 @@ def hotkey_from_vk(vk: int, ctrl: bool = False, alt: bool = False, shift: bool =
     return parse_hotkey("+".join(parts + [label]))
 
 
-def binding_problem(hotkey: Hotkey) -> str | None:
-    """Почему клавишу не стоит назначать (или None, если всё в порядке).
+def binding_warning(hotkey: Hotkey) -> str | None:
+    """О чём предупредить перед назначением клавиши (или None, если предупреждать не о чем).
 
     Зарегистрированная горячая клавиша перестаёт доходить до остальных программ.
     Если назначить просто букву или пробел, ими нельзя будет ни печатать, ни играть.
+    Это не запрет: решает пользователь, окно настройки только переспрашивает.
     """
     if hotkey.vk in _SAFE_ALONE:
         return None
     if hotkey.modifiers & (MOD_CONTROL | MOD_ALT | MOD_WIN):
         return None
     return (
-        f"«{hotkey.label}» без Ctrl или Alt назначить нельзя: эта клавиша перестала бы "
-        "работать в игре и других программах. Добавьте Ctrl или Alt либо выберите F1–F24."
+        f"Пока счётчик запущен, клавиша «{hotkey.label}» перестанет работать в игре "
+        "и в других программах: ею нельзя будет ни печатать, ни управлять в игре.\n\n"
+        "Чтобы этого избежать, добавьте Ctrl или Alt либо выберите F1–F24 "
+        "или цифровой блок.\n\n"
+        f"Всё равно назначить «{hotkey.label}»?"
     )
 
 

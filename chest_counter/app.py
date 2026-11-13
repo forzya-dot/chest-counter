@@ -23,7 +23,7 @@ from PIL import Image, ImageTk
 from .core.autostart import MINIMIZED_FLAG
 from .core.config import DEFAULT_CONFIG, load_config, save_config
 from .core.counter import ChestCounter
-from .core.hotkeys import Hotkey, HotkeyError, binding_problem, has_duplicates, parse_hotkey
+from .core.hotkeys import Hotkey, HotkeyError, has_duplicates, parse_hotkey
 from .core.paths import data_dir, resource_path
 from .core.storage import Storage
 from .ui.hotkeys_window import HotkeysWindow
@@ -174,6 +174,8 @@ class App:
 
     @staticmethod
     def _failure_reason(failed) -> str:
+        if failed.label == "F12":
+            return "зарезервирована самой Windows"
         if failed.already_taken:
             return "уже занята другой программой"
         return f"не зарегистрировалась в Windows (код {failed.error_code})"
@@ -197,10 +199,6 @@ class App:
         changed = [a for a in candidate if candidate[a] != self._hotkeys.get(a)]
         if has_duplicates(candidate):
             return "Эта клавиша уже назначена на другое действие. Выберите другую."
-        for action in changed:
-            problem = binding_problem(candidate[action])
-            if problem:
-                return problem
 
         failures = [f for f in self._restart_listener(candidate) if f.action in changed]
         if failures:
@@ -322,6 +320,8 @@ class App:
                 suspend=self.suspend_hotkeys,
                 resume=self.resume_hotkeys,
                 modifiers_down=self._modifiers_down,
+                # При самопроверке на вопрос «всё равно назначить?» некому ответить.
+                confirm=(lambda _text: True) if self._self_test else None,
             )
         self._hotkeys_window.refresh()
         self._hotkeys_window.show()
@@ -398,10 +398,15 @@ class App:
             window.finish_capture(parse_hotkey("Ctrl+Alt+F8"))
             assert self._hotkeys["add"].label == "Ctrl+Alt+F8", "клавиша не переназначена"
             assert load_config(self._config_path)["hotkeys"]["add"] == "Ctrl+Alt+F8", "не сохранено"
-            # Занятая и «опасная» клавиши должны быть отклонены, а прежняя — остаться.
+            # Клавиша, уже занятая другим действием, отклоняется, прежняя остаётся.
             assert self.change_hotkey("undo", parse_hotkey("Ctrl+Alt+F8")) is not None
-            assert self.change_hotkey("undo", parse_hotkey("K")) is not None
             assert self._hotkeys["undo"].label == "Ctrl+F9"
+            # Обычная буква назначается (после подтверждения) тем же путём, что и в окне.
+            window.start_capture("undo")
+            window.finish_capture(parse_hotkey("K"))
+            assert self._hotkeys["undo"].label == "K", "буква не назначилась"
+            assert self.reset_hotkeys() is None
+            assert self._hotkey_labels() == DEFAULT_CONFIG["hotkeys"], "сброс не сработал"
             if IS_WINDOWS:
                 assert self._listener is not None, "клавиши не включены обратно"
             window.close()

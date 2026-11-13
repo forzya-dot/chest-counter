@@ -23,6 +23,12 @@ class FakeApp:
         self.suspended = False
         self.error = None      # что вернуть из change()
         self.modifiers = (False, False, False)
+        self.answer = True     # ответ на вопрос «всё равно назначить?»
+        self.questions = []
+
+    def confirm(self, text):
+        self.questions.append(text)
+        return self.answer
 
     def change(self, action, hotkey):
         if self.error:
@@ -50,7 +56,7 @@ def setup(monkeypatch):
     app = FakeApp()
     window = HotkeysWindow(
         root, lambda: app.bindings, app.change, lambda: None, app.suspend, app.resume,
-        modifiers_down=lambda: app.modifiers,
+        modifiers_down=lambda: app.modifiers, confirm=app.confirm,
     )
     yield app, window
     root.destroy()
@@ -108,6 +114,44 @@ def test_rejected_key_shows_error_and_restores_hotkeys(setup):
     assert not app.suspended
     assert window._message.cget("text") == "Клавиша занята"
     assert window._labels["end_match"].cget("text") == "F10"
+
+
+def test_plain_letter_is_assigned_after_confirmation(setup):
+    app, window = setup
+    window.start_capture("add")
+    press(window, ord("K"))
+    assert len(app.questions) == 1 and "K" in app.questions[0]
+    assert app.bindings["add"].label == "K"
+    assert not app.suspended
+
+
+def test_plain_letter_is_not_assigned_when_user_says_no(setup):
+    app, window = setup
+    app.answer = False
+    window.start_capture("add")
+    press(window, ord("K"))
+    assert app.bindings["add"].label == "F9"
+    assert window._capturing is None
+    assert not app.suspended
+    assert window._labels["add"].cget("text") == "F9"
+
+
+def test_function_key_is_assigned_without_questions(setup):
+    app, window = setup
+    window.start_capture("add")
+    press(window, 0x75)
+    assert app.questions == []
+    assert app.bindings["add"].label == "F6"
+
+
+def test_mouse_button_explains_itself_and_keeps_waiting(setup):
+    app, window = setup
+    window._on_mouse_button(None)                      # вне ожидания — ничего
+    assert window._message.cget("text") == hotkeys_window.HINT
+    window.start_capture("add")
+    window._on_mouse_button(None)
+    assert window._message.cget("text") == hotkeys_window.NO_MOUSE
+    assert window._capturing == "add"
 
 
 def test_closing_window_during_capture_restores_hotkeys(setup):

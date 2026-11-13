@@ -9,7 +9,7 @@ from chest_counter.core.hotkeys import (
     MODIFIER_VKS,
     Hotkey,
     HotkeyError,
-    binding_problem,
+    binding_warning,
     has_duplicates,
     hotkey_from_vk,
     parse_hotkey,
@@ -86,15 +86,33 @@ def test_hotkey_from_vk_unknown_key():
         assert hotkey_from_vk(vk) is None
 
 
-@pytest.mark.parametrize("text", ["F9", "F24", "Num0", "Pause", "Ctrl+K", "Alt+1", "Ctrl+Shift+Space"])
-def test_safe_bindings_are_allowed(text):
-    assert binding_problem(parse_hotkey(text)) is None
+@pytest.mark.parametrize(
+    "text", ["F9", "F24", "Num0", "NumPlus", "Pause", "Ctrl+K", "Alt+1", "Ctrl+Shift+Space"]
+)
+def test_safe_bindings_need_no_warning(text):
+    assert binding_warning(parse_hotkey(text)) is None
 
 
-@pytest.mark.parametrize("text", ["K", "1", "Space", "Shift+K", "Tab", "Left", "Delete"])
-def test_typing_keys_need_ctrl_or_alt(text):
-    problem = binding_problem(parse_hotkey(text))
-    assert problem and "Ctrl" in problem
+@pytest.mark.parametrize("text", ["K", "1", "Space", "Shift+K", "Tab", "Left", "Delete", "Enter", "["])
+def test_typing_keys_get_a_warning_question(text):
+    """Это предупреждение, а не запрет: текст заканчивается вопросом."""
+    warning = binding_warning(parse_hotkey(text))
+    assert warning and "Ctrl" in warning and warning.rstrip().endswith("?")
+
+
+def test_punctuation_and_numpad_operations_are_supported():
+    assert hotkey_from_vk(0xDB).label == "["
+    assert hotkey_from_vk(0xDC).label == "\\"
+    assert hotkey_from_vk(0xC0, ctrl=True).label == "Ctrl+`"
+    assert hotkey_from_vk(0x6B).label == "NumPlus"
+    assert hotkey_from_vk(0x0D).label == "Enter"
+    # Каждая поддерживаемая клавиша должна читаться обратно из config.json.
+    from chest_counter.core.hotkeys import _VK_TO_LABEL
+
+    for vk, label in _VK_TO_LABEL.items():
+        assert "+" not in label, label
+        assert parse_hotkey(label).vk == vk
+        assert parse_hotkey("Ctrl+Alt+" + label).vk == vk
 
 
 def test_has_duplicates():
