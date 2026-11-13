@@ -1,6 +1,7 @@
 """Окно «Горячие клавиши»: проверяем обработку нажатий без настоящей клавиатуры."""
 
 import sys
+import time
 import tkinter as tk
 from types import SimpleNamespace
 
@@ -44,13 +45,32 @@ class FakeApp:
         self.suspended = False
 
 
+@pytest.fixture(scope="module")
+def root():
+    """Одно окно Tk на все тесты файла.
+
+    Создавать и уничтожать Tk много раз подряд в одном процессе ненадёжно
+    (на Windows это изредка даёт ошибку инициализации Tcl), поэтому окно общее.
+    """
+    error = None
+    for _attempt in range(3):
+        try:
+            window = tk.Tk()
+            break
+        except tk.TclError as exc:
+            error = exc
+            time.sleep(0.5)
+    else:
+        if sys.platform == "win32":
+            raise error  # на Windows экран есть всегда — это настоящая ошибка
+        pytest.skip(f"нет графического экрана: {error}")
+    window.withdraw()
+    yield window
+    window.destroy()
+
+
 @pytest.fixture
-def setup(monkeypatch):
-    try:
-        root = tk.Tk()
-    except tk.TclError:
-        pytest.skip("нет графического экрана")
-    root.withdraw()
+def setup(root, monkeypatch):
     # Проверяем Windows-ветку обработки: там код клавиши — это виртуальный код.
     monkeypatch.setattr(hotkeys_window.sys, "platform", "win32")
     app = FakeApp()
@@ -59,7 +79,8 @@ def setup(monkeypatch):
         modifiers_down=lambda: app.modifiers, confirm=app.confirm,
     )
     yield app, window
-    root.destroy()
+    if window.alive():
+        window.window.destroy()
 
 
 def press(window, vk):
