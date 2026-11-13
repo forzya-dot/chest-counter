@@ -1,12 +1,11 @@
 """Тесты Windows-слоя. На Mac/Linux пропускаются, в GitHub Actions выполняются.
 
 Здесь проверяется то, что нельзя проверить без Windows: настоящая регистрация
-горячих клавиш, определение занятой клавиши, стили окна оверлея, реестр.
+горячих клавиш, определение занятой клавиши, реестр, загрузку системных DLL.
 """
 
 import queue
 import sys
-import time
 
 import pytest
 
@@ -64,43 +63,6 @@ def test_wm_hotkey_message_calls_the_action():
         assert events.get(timeout=3) == "add"
     finally:
         listener.stop()
-
-
-def test_overlay_shows_without_focus_and_hides_itself():
-    import tkinter as tk
-
-    from chest_counter.core import overlay_image
-    from chest_counter.core.config import DEFAULT_CONFIG
-    from chest_counter.win import overlay as win_overlay
-
-    settings = dict(DEFAULT_CONFIG["overlay"], duration_ms=300, fade_ms=150)
-    root = tk.Tk()
-    try:
-        overlay = win_overlay.Overlay(root, settings, overlay_image.placeholder_image())
-        root.update()
-        assert not overlay.visible
-
-        overlay.show(12)
-        root.update()
-        assert overlay.visible
-        assert overlay.on_screen()
-        style = overlay.ex_style()
-        for flag in (
-            win_overlay.WS_EX_LAYERED,
-            win_overlay.WS_EX_TRANSPARENT,
-            win_overlay.WS_EX_NOACTIVATE,
-            win_overlay.WS_EX_TOPMOST,
-        ):
-            assert style & flag, hex(flag)
-
-        deadline = time.monotonic() + 5
-        while overlay.visible and time.monotonic() < deadline:
-            root.update()
-            time.sleep(0.02)
-        assert not overlay.visible
-        assert not overlay.on_screen()
-    finally:
-        root.destroy()
 
 
 def test_autostart_roundtrip(monkeypatch):
@@ -171,3 +133,10 @@ def test_system_dlls_are_loaded_from_system32():
         buffer = ctypes.create_unicode_buffer(1024)
         assert kernel32.GetModuleFileNameW(system_dll(name)._handle, buffer, 1024)
         assert buffer.value.lower().startswith(system32), buffer.value
+
+
+def test_modifiers_state_is_readable():
+    from chest_counter.win.keyboard import modifiers_down
+
+    state = modifiers_down()
+    assert len(state) == 3 and all(isinstance(flag, bool) for flag in state)

@@ -27,6 +27,7 @@ class Tray:
             # default=True — действие по щелчку левой кнопкой по значку.
             pystray.MenuItem("Открыть окно", send("open"), default=True),
             pystray.MenuItem("Статистика", send("stats")),
+            pystray.MenuItem("Горячие клавиши", send("hotkeys")),
             pystray.MenuItem("Экспорт в CSV", send("export")),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(

@@ -20,13 +20,13 @@ from tkinter import filedialog, messagebox
 
 from PIL import Image, ImageTk
 
-from .core import overlay_image
 from .core.autostart import MINIMIZED_FLAG
-from .core.config import DEFAULT_CONFIG, load_config
+from .core.config import DEFAULT_CONFIG, load_config, save_config
 from .core.counter import ChestCounter
-from .core.hotkeys import Hotkey, HotkeyError, parse_hotkey
+from .core.hotkeys import Hotkey, HotkeyError, binding_problem, has_duplicates, parse_hotkey
 from .core.paths import data_dir, resource_path
 from .core.storage import Storage
+from .ui.hotkeys_window import HotkeysWindow
 from .ui.main_window import MainWindow
 from .ui.stats_window import StatsWindow
 
@@ -47,7 +47,8 @@ class App:
         self._events: queue.Queue[str] = queue.Queue()
 
         folder = data_dir()
-        self.config = load_config(folder / "config.json")
+        self._config_path = folder / "config.json"
+        self.config = load_config(self._config_path)
         self.storage = Storage(folder / "stats.db")
         self.counter = ChestCounter(
             self.storage, save_empty_matches=self.config["save_empty_matches"]
@@ -57,31 +58,31 @@ class App:
         self.root.report_callback_exception = self._on_tk_error
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        warnings: list[str] = []
-        self._hotkeys = self._parse_hotkeys(warnings)
+        config_warnings: list[str] = []
+        self._hotkeys = self._parse_hotkeys(config_warnings)
         self.window = MainWindow(
-            self.root, self.add, self.undo, self.end_match,
-            {action: hotkey.label for action, hotkey in self._hotkeys.items()},
+            self.root, self.add, self.undo, self.end_match, self.show_hotkeys,
+            self._hotkey_labels(),
         )
         self._stats: StatsWindow | None = None
+        self._hotkeys_window: HotkeysWindow | None = None
 
-        # Картинка: своя из config.json или встроенная в программу.
-        self._picture = overlay_image.load_image(
-            self.config["overlay"]["image"] or resource_path("assets/chest.png")
-        )
-        self._icon_photo = ImageTk.PhotoImage(_square_icon(self._picture, 64), master=self.root)
+        icon = _load_icon(64)
+        self._icon_photo = ImageTk.PhotoImage(icon, master=self.root)
         self.root.iconphoto(True, self._icon_photo)
 
         # --- части, которые есть только в Windows --------------------------
         self._beeper = None
-        self._overlay = None
         self._listener = None
+        self._hotkey_failures: list = []
         self._tray = None
         self._autostart = None
+        self._modifiers_down = None
         if IS_WINDOWS:
-            self._init_windows(warnings)
+            self._init_windows(icon)
 
         self.refresh()
+        warnings = config_warnings + self._failure_messages()
         if warnings:
             self._warn("\n".join(warnings), popup=not minimized)
         if minimized and self._tray is not None:
@@ -105,54 +106,32 @@ class App:
                 warnings.append(
                     f"В config.json непонятная клавиша «{text}» — использую {default}."
                 )
-        combos = [(hotkey.modifiers, hotkey.vk) for hotkey in result.values()]
-        if len(set(combos)) < len(combos):
+        if has_duplicates(result):
             warnings.append(
-                "В config.json одна и та же клавиша назначена на несколько действий — "
-                "сработает только первое."
+                "Одна и та же клавиша назначена на несколько действий — сработает "
+                "только первое. Исправьте это в окне «Изменить клавиши»."
             )
         return result
 
-    def _init_windows(self, warnings: list[str]) -> None:
+    def _init_windows(self, icon: Image.Image) -> None:
         from .win import autostart
-        from .win.hotkeys import HotkeyListener
-        from .win.overlay import Overlay
+        from .win.keyboard import modifiers_down
         from .win.sound import Beeper
 
+        self._modifiers_down = modifiers_down
         self._autostart = autostart
         try:
             autostart.refresh()  # .exe могли переместить после включения автозапуска
         except OSError:
             log.exception("Не удалось обновить запись автозапуска")
+
         self._beeper = Beeper(self.config["sound"]["enabled"])
-
-        if self.config["overlay"]["enabled"]:
-            try:
-                self._overlay = Overlay(self.root, self.config["overlay"], self._picture)
-            except Exception:
-                log.exception("Не удалось создать оверлей")
-                self._failed = True
-                warnings.append("Не удалось создать картинку поверх экрана (подробности в app.log).")
-
-        # Горячие клавиши: слушатель только кладёт событие в очередь.
-        self._listener = HotkeyListener(self._hotkeys, self._events.put)
-        for failed in self._listener.start():
-            log.warning("Клавиша %s не зарегистрирована, код %s", failed.label, failed.error_code)
-            reason = (
-                "уже занята другой программой"
-                if failed.already_taken
-                else f"не зарегистрировалась (код {failed.error_code})"
-            )
-            warnings.append(
-                f"Клавиша {failed.label} ({ACTION_NAMES[failed.action]}) {reason}. "
-                "Закройте ту программу или поменяйте клавишу в config.json. "
-                "Кнопки в окне работают как обычно."
-            )
+        self._restart_listener(self._hotkeys)
 
         try:
             from .ui.tray import Tray
 
-            self._tray = Tray(_square_icon(self._picture, 64), self._events.put, autostart.is_enabled)
+            self._tray = Tray(icon, self._events.put, autostart.is_enabled)
             self._tray.start()
         except Exception:
             # Без трея программа всё равно полезна: окно будет сворачиваться на панель задач.
@@ -163,13 +142,98 @@ class App:
         self.root.mainloop()
         return 1 if self._failed else 0
 
+    # --- горячие клавиши -------------------------------------------------------
+
+    def _hotkey_labels(self) -> dict[str, str]:
+        return {action: hotkey.label for action, hotkey in self._hotkeys.items()}
+
+    def suspend_hotkeys(self) -> None:
+        """Снимает регистрацию клавиш (пока окно настройки ждёт нажатия)."""
+        if self._listener is not None:
+            self._listener.stop()
+            self._listener = None
+
+    def resume_hotkeys(self) -> None:
+        self._restart_listener(self._hotkeys)
+        self._show_hotkey_status()
+
+    def _restart_listener(self, bindings: dict[str, Hotkey]) -> list:
+        """Регистрирует клавиши заново. Возвращает те, что не зарегистрировались."""
+        self.suspend_hotkeys()
+        self._hotkey_failures = []
+        if not IS_WINDOWS:
+            return []  # на Mac/Linux глобальных клавиш нет, есть только окно
+        from .win.hotkeys import HotkeyListener
+
+        # Слушатель только кладёт событие в очередь.
+        self._listener = HotkeyListener(bindings, self._events.put)
+        self._hotkey_failures = self._listener.start()
+        for failed in self._hotkey_failures:
+            log.warning("Клавиша %s не зарегистрирована, код %s", failed.label, failed.error_code)
+        return self._hotkey_failures
+
+    @staticmethod
+    def _failure_reason(failed) -> str:
+        if failed.already_taken:
+            return "уже занята другой программой"
+        return f"не зарегистрировалась в Windows (код {failed.error_code})"
+
+    def _failure_messages(self) -> list[str]:
+        return [
+            f"Клавиша {failed.label} ({ACTION_NAMES[failed.action]}) {self._failure_reason(failed)}. "
+            "Закройте ту программу или нажмите «Изменить клавиши». "
+            "Кнопки в окне работают как обычно."
+            for failed in self._hotkey_failures
+        ]
+
+    def _show_hotkey_status(self) -> None:
+        self.window.set_status("\n".join(self._failure_messages()))
+
+    def apply_hotkeys(self, candidate: dict[str, Hotkey]) -> str | None:
+        """Назначает новый набор клавиш. Возвращает текст ошибки или None.
+
+        При любой ошибке остаются прежние клавиши.
+        """
+        changed = [a for a in candidate if candidate[a] != self._hotkeys.get(a)]
+        if has_duplicates(candidate):
+            return "Эта клавиша уже назначена на другое действие. Выберите другую."
+        for action in changed:
+            problem = binding_problem(candidate[action])
+            if problem:
+                return problem
+
+        failures = [f for f in self._restart_listener(candidate) if f.action in changed]
+        if failures:
+            # Windows не отдала клавишу — возвращаем всё как было.
+            self._restart_listener(self._hotkeys)
+            self._show_hotkey_status()
+            failed = failures[0]
+            return f"Клавиша {failed.label} {self._failure_reason(failed)}. Выберите другую."
+
+        self._hotkeys = dict(candidate)
+        self.config["hotkeys"] = self._hotkey_labels()
+        self.window.set_hotkey_labels(self._hotkey_labels())
+        self._show_hotkey_status()
+        try:
+            save_config(self._config_path, self.config)
+        except OSError:
+            log.exception("Не удалось сохранить config.json")
+            return "Клавиши изменены, но сохранить настройки на диск не удалось."
+        return None
+
+    def change_hotkey(self, action: str, hotkey: Hotkey) -> str | None:
+        return self.apply_hotkeys({**self._hotkeys, action: hotkey})
+
+    def reset_hotkeys(self) -> str | None:
+        return self.apply_hotkeys(
+            {action: parse_hotkey(text) for action, text in DEFAULT_CONFIG["hotkeys"].items()}
+        )
+
     # --- действия счётчика ---------------------------------------------------
 
     def add(self) -> None:
-        count = self.counter.add()
+        self.counter.add()
         self._beep("add")
-        if self._overlay is not None:
-            self._overlay.show(count)
         self.refresh()
 
     def undo(self) -> None:
@@ -201,9 +265,9 @@ class App:
             "end_match": self.end_match,
             "open": self.show_window,
             "stats": self.show_stats,
+            "hotkeys": self.show_hotkeys,
             "export": self.export_csv,
             "toggle_autostart": self.toggle_autostart,
-            "quit": self.quit,
         }
         while True:
             try:
@@ -248,6 +312,20 @@ class App:
         self._stats.refresh()
         self._stats.show()
 
+    def show_hotkeys(self) -> None:
+        if self._hotkeys_window is None or not self._hotkeys_window.alive():
+            self._hotkeys_window = HotkeysWindow(
+                self.root,
+                get_bindings=lambda: self._hotkeys,
+                change=self.change_hotkey,
+                reset=self.reset_hotkeys,
+                suspend=self.suspend_hotkeys,
+                resume=self.resume_hotkeys,
+                modifiers_down=self._modifiers_down,
+            )
+        self._hotkeys_window.refresh()
+        self._hotkeys_window.show()
+
     def export_csv(self) -> None:
         parent = self._stats.window if self._stats is not None and self._stats.alive() else self.root
         path = filedialog.asksaveasfilename(
@@ -277,8 +355,7 @@ class App:
             self._tray.refresh_menu()
 
     def quit(self) -> None:
-        if self._listener is not None:
-            self._listener.stop()  # снимает регистрацию горячих клавиш
+        self.suspend_hotkeys()  # снимает регистрацию горячих клавиш
         if self._tray is not None:
             self._tray.stop()
         self.storage.close()
@@ -312,8 +389,22 @@ class App:
         def step_add():
             self.add()
             assert self.counter.current == 1, "счётчик не увеличился"
-            if IS_WINDOWS and self.config["overlay"]["enabled"]:
-                assert self._overlay is not None and self._overlay.visible, "оверлей не показан"
+
+        def step_rebind():
+            self.show_hotkeys()
+            window = self._hotkeys_window
+            # Тот же путь, что и при нажатии клавиши в окне настройки.
+            window.start_capture("add")
+            window.finish_capture(parse_hotkey("Ctrl+Alt+F8"))
+            assert self._hotkeys["add"].label == "Ctrl+Alt+F8", "клавиша не переназначена"
+            assert load_config(self._config_path)["hotkeys"]["add"] == "Ctrl+Alt+F8", "не сохранено"
+            # Занятая и «опасная» клавиши должны быть отклонены, а прежняя — остаться.
+            assert self.change_hotkey("undo", parse_hotkey("Ctrl+Alt+F8")) is not None
+            assert self.change_hotkey("undo", parse_hotkey("K")) is not None
+            assert self._hotkeys["undo"].label == "Ctrl+F9"
+            if IS_WINDOWS:
+                assert self._listener is not None, "клавиши не включены обратно"
+            window.close()
 
         def step_end():
             self.show_stats()
@@ -326,15 +417,23 @@ class App:
             self.quit()
 
         self.root.after(500, step_add)
-        self.root.after(1200, step_end)
+        self.root.after(900, step_rebind)
+        self.root.after(1500, step_end)
         self.root.after(2500, step_quit)
 
 
-def _square_icon(picture: Image.Image, size: int) -> Image.Image:
-    """Квадратный значок из картинки (для окна и трея)."""
-    fitted = overlay_image.fit_image(picture, size)
+def _load_icon(size: int) -> Image.Image:
+    """Квадратный значок для окна и трея из картинки, упакованной в программу."""
     icon = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    icon.alpha_composite(fitted, ((size - fitted.width) // 2, (size - fitted.height) // 2))
+    try:
+        with Image.open(resource_path("assets/chest.png"), formats=("PNG",)) as image:
+            picture = image.convert("RGBA")
+        picture.thumbnail((size, size), Image.LANCZOS)
+        icon.alpha_composite(picture, ((size - picture.width) // 2, (size - picture.height) // 2))
+    except Exception:
+        # Картинка не нашлась — программа должна работать и без неё.
+        log.exception("Не удалось загрузить значок")
+        icon.paste((245, 185, 66, 255), (size // 8, size // 8, size - size // 8, size - size // 8))
     return icon
 
 
@@ -349,7 +448,7 @@ def _native_message(text: str, error: bool = False) -> None:
 
 
 def _enable_dpi_awareness() -> None:
-    """Чёткий текст и настоящие пиксели на экранах с масштабом 125–200 %."""
+    """Чёткий текст на экранах с масштабом 125–200 %."""
     try:
         from .win._dll import system_dll
 

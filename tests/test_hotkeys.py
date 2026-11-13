@@ -6,8 +6,12 @@ from chest_counter.core.hotkeys import (
     MOD_ALT,
     MOD_CONTROL,
     MOD_SHIFT,
+    MODIFIER_VKS,
     Hotkey,
     HotkeyError,
+    binding_problem,
+    has_duplicates,
+    hotkey_from_vk,
     parse_hotkey,
 )
 
@@ -56,3 +60,45 @@ def test_autostart_command_for_script():
         build_command(r"C:\Py\pythonw.exe", r"C:\src\main.py")
         == r'"C:\Py\pythonw.exe" "C:\src\main.py" --minimized'
     )
+
+
+# --- переназначение клавиш ---------------------------------------------------
+
+
+def test_hotkey_from_vk_plain_and_with_modifiers():
+    assert hotkey_from_vk(0x78) == parse_hotkey("F9")
+    assert hotkey_from_vk(0x78, ctrl=True) == parse_hotkey("Ctrl+F9")
+    assert hotkey_from_vk(ord("K"), ctrl=True, alt=True, shift=True).label == "Ctrl+Alt+Shift+K"
+    assert hotkey_from_vk(0x65).label == "Num5"
+
+
+def test_hotkey_from_vk_roundtrips_through_config_text():
+    """То, что записано в config.json, должно читаться обратно в ту же клавишу."""
+    for vk in (0x70, 0x87, 0x30, 0x5A, 0x60, 0x20, 0x2D):
+        hotkey = hotkey_from_vk(vk, ctrl=True, shift=True)
+        assert parse_hotkey(hotkey.label) == hotkey
+
+
+def test_hotkey_from_vk_unknown_key():
+    assert hotkey_from_vk(0xFF) is None
+    assert hotkey_from_vk(0x1B) is None  # Esc — это отмена, а не клавиша
+    for vk in MODIFIER_VKS:
+        assert hotkey_from_vk(vk) is None
+
+
+@pytest.mark.parametrize("text", ["F9", "F24", "Num0", "Pause", "Ctrl+K", "Alt+1", "Ctrl+Shift+Space"])
+def test_safe_bindings_are_allowed(text):
+    assert binding_problem(parse_hotkey(text)) is None
+
+
+@pytest.mark.parametrize("text", ["K", "1", "Space", "Shift+K", "Tab", "Left", "Delete"])
+def test_typing_keys_need_ctrl_or_alt(text):
+    problem = binding_problem(parse_hotkey(text))
+    assert problem and "Ctrl" in problem
+
+
+def test_has_duplicates():
+    keys = {"add": parse_hotkey("F9"), "undo": parse_hotkey("Ctrl+F9"), "end_match": parse_hotkey("F10")}
+    assert not has_duplicates(keys)
+    keys["end_match"] = parse_hotkey("f9")
+    assert has_duplicates(keys)

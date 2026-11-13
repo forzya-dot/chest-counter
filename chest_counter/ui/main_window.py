@@ -16,6 +16,7 @@ class MainWindow:
         on_add: Callable[[], None],
         on_undo: Callable[[], None],
         on_end_match: Callable[[], None],
+        on_hotkeys: Callable[[], None],
         hotkey_labels: dict[str, str],
     ):
         self.root = root
@@ -45,9 +46,8 @@ class MainWindow:
         self._today = self._make_card(cards, "Сегодня", 0)
         self._all_time = self._make_card(cards, "За всё время", 1)
 
-        theme.make_button(
-            body, f"+1 сундук   ({hotkey_labels['add']})", on_add, primary=True
-        ).pack(fill="x", pady=(16, 8))
+        self._add_button = theme.make_button(body, "+1 сундук", on_add, primary=True)
+        self._add_button.pack(fill="x", pady=(16, 8))
 
         row = tk.Frame(body, bg=theme.BG)
         row.pack(fill="x")
@@ -58,16 +58,32 @@ class MainWindow:
             row=0, column=1, sticky="ew", padx=(4, 0)
         )
 
-        tk.Label(
-            body,
-            text=f"{hotkey_labels['undo']} — отменить   ·   {hotkey_labels['end_match']} — завершить",
-            font=theme.font(9), bg=theme.BG, fg=theme.MUTED,
-        ).pack(pady=(12, 0))
+        self._hint = tk.Label(body, text="", font=theme.font(9), bg=theme.BG, fg=theme.MUTED)
+        self._hint.pack(pady=(12, 0))
+
+        # Неброская кнопка-ссылка: открывает окно переназначения клавиш.
+        link = tk.Label(
+            body, text="Изменить клавиши", font=(theme.FONT, 9, "underline"),
+            bg=theme.BG, fg=theme.MUTED, cursor="hand2",
+        )
+        link.pack(pady=(4, 0))
+        link.bind("<Button-1>", lambda _e: on_hotkeys())
+        link.bind("<Enter>", lambda _e: link.configure(fg=theme.TEXT))
+        link.bind("<Leave>", lambda _e: link.configure(fg=theme.MUTED))
 
         # Строка для сообщений (например, «клавиша F9 занята»). Пустая — не занимает места.
         self._status = tk.Label(
             body, text="", font=theme.font(9), bg=theme.BG, fg=theme.WARNING,
             wraplength=300, justify="center",
+        )
+
+        self.set_hotkey_labels(hotkey_labels)
+
+    def set_hotkey_labels(self, labels: dict[str, str]) -> None:
+        """Показывает текущие клавиши на кнопке и в подсказке."""
+        self._add_button.configure(text=f"+1 сундук   ({labels['add']})")
+        self._hint.configure(
+            text=f"{labels['undo']} — отменить   ·   {labels['end_match']} — завершить"
         )
 
     @staticmethod

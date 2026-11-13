@@ -1,6 +1,6 @@
 import json
 
-from chest_counter.core.config import DEFAULT_CONFIG, load_config
+from chest_counter.core.config import DEFAULT_CONFIG, _merge, load_config
 
 
 def test_creates_default_file_when_missing(tmp_path):
@@ -19,13 +19,12 @@ def test_returned_config_is_a_copy(tmp_path):
 def test_user_values_are_kept_and_missing_keys_filled(tmp_path):
     path = tmp_path / "config.json"
     path.write_text(
-        json.dumps({"hotkeys": {"add": "F6"}, "overlay": {"size": 300}}), encoding="utf-8"
+        json.dumps({"hotkeys": {"add": "F6"}, "sound": {"enabled": False}}), encoding="utf-8"
     )
     config = load_config(path)
     assert config["hotkeys"] == {"add": "F6", "undo": "Ctrl+F9", "end_match": "F10"}
-    assert config["overlay"]["size"] == 300
-    assert config["overlay"]["duration_ms"] == 1500
-    assert config["sound"]["enabled"] is True
+    assert config["sound"]["enabled"] is False
+    assert config["save_empty_matches"] is False
     # Недостающие ключи дописаны в файл.
     assert json.loads(path.read_text(encoding="utf-8")) == config
 
@@ -33,21 +32,26 @@ def test_user_values_are_kept_and_missing_keys_filled(tmp_path):
 def test_wrong_types_fall_back_to_defaults(tmp_path):
     path = tmp_path / "config.json"
     path.write_text(
-        json.dumps(
-            {
-                "hotkeys": "F9",
-                "sound": {"enabled": "да"},
-                "overlay": {"size": "большой", "enabled": 1, "duration_ms": True},
-            }
-        ),
+        json.dumps({"hotkeys": "F9", "sound": {"enabled": "да"}, "save_empty_matches": 1}),
         encoding="utf-8",
     )
     config = load_config(path)
     assert config["hotkeys"] == DEFAULT_CONFIG["hotkeys"]
     assert config["sound"]["enabled"] is True
-    assert config["overlay"]["size"] == 160
-    assert config["overlay"]["enabled"] is True
-    assert config["overlay"]["duration_ms"] == 1500
+    assert config["save_empty_matches"] is False
+
+
+def test_settings_from_old_version_are_dropped(tmp_path):
+    """В версии 1.0 был раздел overlay — новая версия его убирает и не падает."""
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps({"hotkeys": {"add": "F7"}, "overlay": {"enabled": True, "size": 160}}),
+        encoding="utf-8",
+    )
+    config = load_config(path)
+    assert "overlay" not in config
+    assert config["hotkeys"]["add"] == "F7"
+    assert "overlay" not in json.loads(path.read_text(encoding="utf-8"))
 
 
 def test_broken_json_is_backed_up_and_replaced(tmp_path):
@@ -66,15 +70,13 @@ def test_file_with_bom_is_read(tmp_path):
     assert load_config(path)["hotkeys"]["add"] == "F7"
 
 
-def test_nan_and_infinity_are_rejected(tmp_path):
-    """Python читает NaN и Infinity из JSON — в настройках им не место."""
-    path = tmp_path / "config.json"
-    path.write_text(
-        '{"overlay": {"size": Infinity, "duration_ms": NaN, "offset_x": -Infinity}}',
-        encoding="utf-8",
-    )
-    overlay = load_config(path)["overlay"]
-    assert (overlay["size"], overlay["duration_ms"], overlay["offset_x"]) == (160, 1500, 40)
+def test_merge_checks_number_types():
+    """Числовых настроек сейчас нет, но правило слияния для них должно работать."""
+    defaults = {"size": 160, "ratio": 1.5}
+    assert _merge(defaults, {"size": 300, "ratio": 2}) == {"size": 300, "ratio": 2}
+    assert _merge(defaults, {"size": "большой", "ratio": True}) == defaults
+    # Python читает NaN и Infinity из JSON — в настройках им не место.
+    assert _merge(defaults, json.loads('{"size": Infinity, "ratio": NaN}')) == defaults
 
 
 def test_unwritable_location_still_returns_defaults(tmp_path):

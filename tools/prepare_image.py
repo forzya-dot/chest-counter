@@ -1,4 +1,4 @@
-"""Готовит картинку для оверлея: убирает белый фон и обрезает пустые поля.
+"""Готовит картинку для значка программы: убирает белый фон и обрезает пустые поля.
 
 Запуск:  python tools/prepare_image.py исходник.png assets/chest.png
 (рядом появится и значок программы assets/icon.ico)
@@ -16,7 +16,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 THRESHOLD = 120   # насколько цвет может отличаться от белого, чтобы считаться фоном
-MAX_SIDE = 512    # больше для оверлея не нужно, а .exe будет легче
+MAX_SIDE = 512    # больше для значка не нужно, а .exe будет легче
 
 
 def remove_background(image: Image.Image) -> Image.Image:

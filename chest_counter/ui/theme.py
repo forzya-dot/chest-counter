@@ -16,7 +16,7 @@ FONT = "Segoe UI"  # есть в любой Windows 10/11
 
 
 def font(size: int, bold: bool = False) -> tuple:
-    return (FONT, size, "bold") if bold else (FONT, size)
+    return (FONT, size, "bold") if bold else (FONT, size, "normal")
 
 
 def make_button(parent, text, command, primary=False) -> tk.Button:
